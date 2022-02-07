@@ -1,0 +1,766 @@
+---
+title: "Walker et al. 2022 Ecology & Evolution | Aboveground competition influences density-dependent effects of cordgrass on sediment biogeochemistry"
+author: "Gabriel Greenberg-Pines"
+date: "6/09/2022"
+output: html_document
+---
+##Packages 
+```{r}
+library(rcompanion)
+library(tidyverse)
+library(car)
+library(multcomp)
+library(lme4)
+library(glmmTMB)
+library(DHARMa)
+```
+##Data
+```{r }
+########Plant and soil metrics 
+COMP<- read.csv("WALKERETAL_2022_DATA/CSV/COMP.csv", stringsAsFactors = FALSE, na.strings = c("NA", ""))
+
+##Change assemblage to factor 
+COMP$Assemblage<- factor(COMP$Assemblage)
+is.factor(COMP$Assemblage)
+
+##Transform stem density to meters squared 
+COMP <- COMP %>% 
+      mutate(Live.Stem.Num.M = Live.Stem.Num * (1/.49))
+
+##Update levels
+levels(COMP$Assemblage) <- c("pickleweed removal", "mixed", "cordgrass removal")
+  
+##Add line breaks
+levels(COMP$Assemblage) <- gsub(" ", "\n", levels(COMP$Assemblage))
+
+##Filter for september
+COMP <- COMP %>% 
+  filter(Month == "September")
+
+##Remove destroyed plots with stemborers from KF1 (P+5, C-3, C-4)
+COMP <- COMP[-c(13,14,90),]
+
+########FEO3 metrics
+FEO3<- read.csv("WALKERETAL_2022_DATA/CSV/FEO3.csv", stringsAsFactors = FALSE, na.strings = c("NA", ""))
+
+##Change assemblage and depth to factor 
+FEO3$Assemblage<-factor(FEO3$Assemblage)
+FEO3$Depth<-factor(FEO3$Depth)
+
+##Transform stem density to meters squared 
+FEO3 <- FEO3 %>% 
+      mutate(Stem.Num.M = Stem.Num * (1/.49))
+
+###Change depth levels
+levels(FEO3$Depth) <- c("0-10 cm", "10-20 cm")
+
+##Add levels
+levels(FEO3$Assemblage) <- c("pickleweed removal", "mixed", "cordgrass removal")
+  
+##Add line breaks
+levels(FEO3$Assemblage) <- gsub(" ", "\n", levels(FEO3$Assemblage))
+
+########Aboveground biomass metrics
+AGB<- read.csv("WALKERETAL_2022_DATA/CSV/AGB.csv", stringsAsFactors = FALSE, na.strings = c("NA", ""))
+
+##Transform to meters cubed
+AGB <- AGB %>% 
+   mutate(Biomass.M = (Biomass/.00397848)*0.0675)
+
+##Remove destroyed plots with stemborers from KF1 (P+5, C-3, C-4)
+AGB <- AGB[-c(23,24,30,31,175,182),]
+
+##Make treatment a factor
+AGB$Assemblage <- factor(AGB$Assemblage)
+is.factor(AGB$Assemblage)
+
+##Add levels
+levels(AGB$Assemblage) <- c("pickleweed removal", "mixed", "cordgrass removal")
+  
+##Add line breaks
+levels(AGB$Assemblage) <- gsub(" ", "\n", levels(AGB$Assemblage))
+
+########Belowground biomass metrics
+BGB<- read.csv("WALKERETAL_2022_DATA/CSV/BGB.csv", stringsAsFactors = FALSE, na.strings = c("NA", ""))
+
+##Change assemblage to factor 
+BGB$Assemblage<-factor(BGB$Assemblage)
+is.factor(BGB$Assemblage)
+
+##Rename column
+BGB<- rename(BGB, "Rep" = "Plot")
+
+##Transform to meters cubed
+BGB <- BGB %>% 
+   mutate(Biomass.M = (Final.dry.biomass..g./.00397848)*0.0675)
+
+##Add levels
+levels(BGB$Assemblage) <- c("pickleweed removal", "mixed", "cordgrass removal")
+  
+##Add line breaks
+levels(BGB$Assemblage) <- gsub(" ", "\n", levels(BGB$Assemblage))
+
+########Percent cover metrics
+PCOVER<-read.csv("WALKERETAL_2022_DATA/CSV/PERCENTCOVER.csv", stringsAsFactors = FALSE, na.strings = c("NA", ""))
+
+##Add treatment IDs
+PCOVER<- PCOVER %>% 
+    mutate(Treatment = case_when(
+    Focal.Plant == "pickleweed" & Neighbor == "present" ~ "mixed",
+    Focal.Plant == "pickleweed" & Neighbor == "absent" ~ "cordgrass removal",
+    Focal.Plant == "cordgrass" & Neighbor == "present" ~ "mixed",
+    Focal.Plant == "cordgrass" & Neighbor == "absent" ~ "pickleweed removal"))
+
+##Make treatment a factor
+PCOVER$Treatment <- as.factor(PCOVER$Treatment)
+
+##Change levels
+PCOVER$Treatment <- factor(PCOVER$Treatment, levels = c("pickleweed removal", "mixed", "cordgrass removal"))
+
+##Add line breaks
+levels(PCOVER$Treatment) <- gsub(" ", "\n", levels(PCOVER$Treatment))
+
+##Create total % cover variable
+PCOVER$Total.cov <- (PCOVER$Corr.SF.L + PCOVER$Corr.SF.D + PCOVER$Corr.Spac)*100
+
+##Remove space in September
+PCOVER$Month <- plyr::revalue(PCOVER$Month, c("September " = "September"))
+
+##Filter for September
+PCOVER<- PCOVER %>% 
+  filter( Month == "September")
+
+##Remove destroyed plots with stemborers from KF1 (P+5, C-3, C-4)
+PCOVER <- PCOVER[-c(82,83,91),]
+
+########Inital stem densities
+INITAL_SD<- read.csv("WALKERETAL_2022_DATA/CSV/INITAL_STEMDENSITY.csv", stringsAsFactors = FALSE, na.strings = c("NA", ""))
+
+##Mutate live stem number and rename to indicate inital
+INITAL_SD <- INITAL_SD %>% 
+mutate(Stem.Num.IN.M = Live.Stem.Num * (1/.49))
+
+##Remove destroyed plots with stemborers from KF1 (P+5, C-3, C-4)
+INITAL_SD <- INITAL_SD[-c(82,83,91),]
+
+## Filter data
+INITAL_SD.M <- INITAL_SD %>%
+   dplyr::select(Stem.Num.IN.M,Year,Rep,Site)
+
+## Filter SDL2 ONLY
+INITAL_SD.SDL2 <- INITAL_SD %>%
+  filter(Site == "SDL") %>%
+  filter(Year == "2017") %>% 
+   dplyr::select(Stem.Num.IN.M,Rep)
+
+########Inital percent cover metrics 
+IN.COV<- read.csv("WALKERETAL_2022_DATA/CSV/INITAL_PERCENTCOVER.csv", stringsAsFactors = FALSE, na.strings = c("NA", ""))
+
+##Add treatment IDs
+IN.COV<- IN.COV %>% 
+    mutate(Treatment = case_when(
+    Focal.Plant == "pickleweed" & Neighbor == "present" ~ "mixed",
+    Focal.Plant == "pickleweed" & Neighbor == "absent" ~ "cordgrass removal",
+    Focal.Plant == "cordgrass" & Neighbor == "present" ~ "mixed",
+    Focal.Plant == "cordgrass" & Neighbor == "absent" ~ "pickleweed removal"))
+
+##Make treatment a factor
+IN.COV$Treatment <- as.factor(IN.COV$Treatment)
+
+##Change levels
+IN.COV$Treatment <- factor(IN.COV$Treatment, levels = c("pickleweed removal", "mixed", "cordgrass removal"))
+
+##Add line breaks
+levels(IN.COV$Treatment) <- gsub(" ", "\n", levels(IN.COV$Treatment))
+
+##Remove destroyed plots with stemborers from KF1 (P+5, C-3, C-4)
+IN.COV<- IN.COV[-c(82,83,91),]
+```
+##Join data files
+```{r}
+##Add inital stem densities to data sets
+COMPM<-left_join(COMP, INITAL_SD.M, by= c("Year","Rep","Site"))
+
+##Check and compare data 
+View(COMPM)
+View(COMP)
+
+ABGM<-left_join(AGB,INITAL_SD.M, by= c("Year","Rep","Site"))
+
+##Check and compare data 
+View(ABGM)
+View(AGB)
+
+BGBM<-left_join(BGB,INITAL_SD.SDL2, by= c("Rep"))
+
+##Check and compare data 
+View(BGBM)
+View(BGB)
+
+FEO3M<-left_join(FEO3,INITAL_SD.SDL2, by= c("Rep"))
+
+##Check and compare data 
+View(FEO3M)
+View(FEO3)
+
+PCOVERM<-left_join(PCOVER,INITAL_SD.M, by= c("Year","Rep","Site"))
+
+##Check and compare data 
+View(PCOVERM)
+View(PCOVER)
+```
+##Cordgrass Stem Density 
+```{r}
+##Filter
+sd.ass <- COMPM%>% 
+filter(Assemblage != "cordgrass\nremoval")%>% 
+filter(!is.na(Live.Stem.Num.M))
+
+##Sharpio & Levene 
+shapiro.test(sd.ass$Live.Stem.Num.M)#Normal
+leveneTest(Live.Stem.Num.M ~ Assemblage, data=sd.ass)#Normal
+
+##Plot distribution
+plotdist(sd.ass$Live.Stem.Num.M, histo = TRUE, demp = TRUE)
+
+##Model
+sd.ass.lm <- lmer(Live.Stem.Num.M~ Assemblage+ Stem.Num.IN.M + (1|Site_ID), data=sd.ass)
+
+##Diagnostics
+plot(sd.ass.lm)
+
+##Summary
+sd.ass.sum <- summary(sd.ass.lm)
+
+##Anova
+sd.ass.aov <- Anova(sd.ass.lm)
+```
+##Inital Cordgrass Stem Density 
+```{r}
+##Filter
+In.sd.ass <- COMPM%>% 
+filter(!is.na(Stem.Num.IN.M))
+
+##Make site a factor
+In.sd.ass$Site_ID<- as.factor(In.sd.ass$Site_ID)
+
+##Sharpio & Levene 
+shapiro.test(log10(In.sd.ass$Stem.Num.IN.M))#Normal
+leveneTest(Stem.Num.IN.M ~ Assemblage, data=In.sd.ass)#Normal
+
+##Plot distribution
+plotdist(log10(In.sd.ass$Stem.Num.IN.M), histo = TRUE, demp = TRUE)
+
+##Model
+In.sd.ass.lm <- lmer(log10(Stem.Num.IN.M)~ Assemblage + (1|Site_ID), data=In.sd.ass)
+
+##Diagnostics
+plot(In.sd.ass.lm)
+
+##Summary
+In.sd.ass.sum <- summary(In.sd.ass.lm)
+
+##Anova
+In.sd.ass.aov <- Anova(In.sd.ass.lm)
+
+##Tukey
+In.sd.ass.nre.tuk <- tidy(summary(glht(In.sd.ass.nre, mcp(Site_ID ="Tukey"))))
+```
+##Cordgrass Stem Height
+```{r}
+##Filter
+sh.ass <- COMPM%>% 
+ filter(Assemblage != "cordgrass\nremoval")%>%
+ filter(is.na(Avg.SH))
+
+##Sharpio & Levene
+shapiro.test(sh.ass$Avg.SH)#Normal
+leveneTest(Avg.SH ~ Assemblage, data=sh.ass)#Normal
+
+##Plot distribution
+plotdist(sh.ass$Avg.SH, histo = TRUE, demp = TRUE)
+
+##Models- top model has a random effect for site
+sh.ass.lm <- lmer(Avg.SH ~ Assemblage+ Stem.Num.IN.M + (1|Site_ID), data=sh.ass)
+
+##Diagnostics
+plot(sh.ass.lm)
+
+##Summary
+sh.ass.sum <- summary(sh.ass.lm)
+
+##Anova
+sh.ass.aov <- Anova(sh.ass.lm)
+```
+##Pickleweed Canopy Height
+```{r}
+##Filter
+ch.ass <- COMPM%>% 
+ filter(Assemblage != "pickleweed\nremoval")%>%
+ filter(!is.na(Avg.CH))
+
+##Sharpio & Levene
+shapiro.test(ch.ass$Avg.CH)#Normal
+leveneTest(Avg.CH ~ Assemblage, data=ch.ass)#Normal
+
+##Plot distribution 
+plotdist(ch.ass$Avg.CH, histo = TRUE, demp = TRUE)
+
+##Models - top model has a random effect for site
+ch.ass.lm <- lmer(Avg.CH ~ Assemblage + Stem.Num.IN.M + (1|Site_ID), data=ch.ass)
+
+##Diagnostics
+plot(ch.ass.lm)
+
+##Summary
+ch.ass.sum <- summary(ch.ass.lm)
+
+##Anova
+ch.ass.aov <- Anova(ch.ass.lm)
+```
+##Percent Cover
+```{r}
+##Filter
+pcov.ass <- PCOVERM %>% 
+  filter(!is.na(Total.cov))
+
+##Sharpio & Levene 
+shapiro.test(pcov.ass$Total.cov)#NotNormal
+leveneTest(Total.cov~ Treatment, data=pcov.ass)#NotNormal
+
+##Plot distribution
+plotdist(pcov.ass$Total.cov, histo = TRUE, demp = TRUE)
+
+##Model | Adding log link to force exponential distribution
+pcov.ass.glm <- glmmTMB(Total.cov ~ Treatment + Stem.Num.IN.M + (1|Site_ID), family = Gamma(link ="log"),data=pcov.ass)
+
+##Diagnostics
+pcov.ass.glm.res <- simulateResiduals(pcov.ass.glm)
+plot(pcov.ass.glm.res) 
+
+##Summary
+pcov.ass.sum <- summary(pcov.ass.glm)
+
+##Anova
+pcov.ass.aov <- Anova(pcov.ass.glm)
+
+##Post Hoc Tukey
+pcov.ass.tuk <- tidy(summary(glht(pcov.ass.glm, mcp(Treatment ="Tukey"))))
+```
+##Above Ground Biomass
+```{r}
+##Filter
+abg.ass <- ABGM%>% 
+ filter(!is.na(Biomass.M))
+
+##Sharpio & Levene 
+shapiro.test(abg.ass$Biomass.M)#NotNormal
+leveneTest(Biomass.M ~ Assemblage, data=abg.ass)#Normal
+
+##Plot distribution
+plotdist(abg.ass$Biomass.M, histo = TRUE, demp = TRUE)
+
+##Models- top model has a random effect for site
+abg.ass.glm <- glmmTMB(Biomass.M ~ Assemblage * Plant + Stem.Num.IN.M + (1|Site_ID), ziformula = ~1, family = gaussian(), data=abg.ass)
+
+##Diagnostics
+abg.ass.glm.res <- simulateResiduals(abg.ass.glm)
+plot(abg.ass.glm.res)
+
+##Summary
+abg.ass.sum <- summary(abg.ass.glm)
+
+##Anova
+abg.ass.aov <- Anova(abg.ass.glm)
+```
+##Below Ground Biomass
+```{r}
+##Filter
+bgb.ass <- BGBM %>% 
+  filter(Species != "total")%>% 
+  filter(!is.na(Biomass.M))
+
+##Change species to factor
+bgb.ass$Species <- as.factor(bgb.ass$Species)
+
+##Sharpio & Levene | Log10 transform to meet normality assumption
+shapiro.test(log10(bgb.ass$Biomass.M))#Normal
+leveneTest(log10(Biomass.M) ~ Assemblage, data=bgb.ass)#Normal
+
+##Plot distribution
+plotdist(log10(bgb.ass$Biomass.M), histo = TRUE, demp = TRUE)
+
+##Model
+bgb.ass.lm <- lm(log10(Biomass.M) ~ Assemblage * Species + Stem.Num.IN.M, data=bgb.ass)
+
+##Diagnostics
+plot(bgb.ass.lm)
+
+##Summary
+bgb.ass.sum <- summary(bgb.ass.lm)
+
+##Anova
+bgb.ass.aov <- Anova(bgb.ass.lm)
+
+##Post Hoc Tukey
+bgb.ass.tuk <-tidy(summary(glht(bgb.ass.lm,mcp(Species="Tukey"))))
+```
+##FE03 
+```{r}
+##Sharpio & Levene
+shapiro.test(FEO3M$FeO3.Tot)#NotNormal
+leveneTest(FeO3.Tot~ Depth * Assemblage, data=FEO3M)#Normal
+
+##Plot distribution
+plotdist(FEO3$FeO3.Tot, histo = TRUE, demp = TRUE)
+
+##lm
+feo3.glm <- glm(FeO3.Tot ~ Assemblage * Depth + Stem.Num.IN.M, data=FEO3M)
+
+##Diagnostics
+plot(feo3.glm)
+
+##Summary
+feo3.sum <- summary(feo3.glm)
+
+##Anova
+feo3.aov<- Anova(feo3.glm)
+
+##Post Hoc Tukey Assemblage
+feo3.ass.tuk <-tidy(summary(glht(feo3.glm, mcp(Assemblage="Tukey"))))
+  
+##Post Hoc Tukey Depth
+feo3.ass.depth <-tidy(summary(glht(feo3.glm, mcp(Depth ="Tukey"))))
+  
+##Add interaction factor
+FEO3M$IntFac <- interaction(FEO3M$Assemblage, FEO3M$Depth)
+  
+##Create model with interaction factor
+m.finalI<-glm(FeO3.Tot ~ IntFac, family = gaussian(),data= FEO3M)
+  
+##Summary stats
+summary(m.finalI) 
+  
+##Post hoc test for interaction model
+post.hoc.interaction <- glht(m.finalI, linfct=mcp(IntFac = "Tukey"))
+  
+##Summary stats
+summary(post.hoc.interaction)
+   
+##Post hoc significance codes
+cld(post.hoc.interaction)
+```
+##FEO3 ~ Stem Density
+```{r Model 0-10}
+##Filter
+feo3.010 <- FEO3M %>% 
+  filter(Depth == "0-10 cm")
+
+##Sharpio
+shapiro.test(feo3.010$FeO3.Tot)#NotNormal
+
+##Visualize distribution
+plotdist(feo3.010$FeO3.Tot, histo = TRUE, demp = TRUE)
+
+##Model
+feo3.010.glm<- glm(FeO3.Tot ~ Stem.Num.M * Assemblage + Stem.Num.IN.M, data=feo3.010)
+
+##Diagnostics
+plot(feo3.010.glm)
+
+##Summary
+feo3.010.sum <- summary(feo3.010.glm)
+
+##Anova 
+feo3.010.aov <- Anova(feo3.010.glm)
+
+##Model for regression line
+feo3.010.rl <-lm(FeO3.Tot ~ Stem.Num.M, data = feo3.010)
+
+##Summary
+summary(feo3.010.rl)
+```
+
+```{r Model 10-20}
+##Filter
+feo3.1020 <- FEO3M %>% 
+  filter(Depth == "10-20 cm")
+
+##Sharpio
+shapiro.test(feo3.1020$FeO3.Tot)#Normal
+
+##Visualize distribution
+plotdist(feo3.1020$FeO3.Tot, histo = TRUE, demp = TRUE)
+
+##Model
+feo3.1020.glm <- glm(FeO3.Tot ~ Stem.Num.M * Assemblage + Stem.Num.IN.M, data=feo3.1020)
+
+##Diagnostics
+plot(feo3.1020.glm)
+
+##Summary
+feo3.1020.sum <- summary(feo3.1020.glm)
+
+##Anova
+feo3.1020.aov <- Anova(feo3.1020.glm)
+
+##Model for regression line
+feo3.1020.rl <- lm(FeO3.Tot ~ Stem.Num, data = feo3.1020)
+
+##Summary
+summary(feo3.1020.rl)
+```
+##Ammounium
+```{r}
+##Filter
+amm.ass<- COMPM%>% 
+ filter(!is.na(Mean.Amm)) %>%
+ filter(Mean.Amm >= 0)#9 non-detects (i.e. negative ammonium values)
+
+##Sharpio & Levene
+shapiro.test(log10(amm.ass$Mean.Amm))#Normal
+leveneTest(log10(Mean.Amm) ~ Assemblage, data=amm.ass)#Normal
+
+##Plot  Distribution
+plotdist(log10(amm.ass$Mean.Amm), histo = TRUE, demp = TRUE)
+
+##Model
+amm.ass.lm <- lmer(log10(Mean.Amm) ~ Assemblage + Stem.Num.IN.M + (1|Site_ID), data=amm.ass)
+
+##Diagnostics
+plot(amm.ass.lm)
+
+##Summary
+amm.ass.sum <- summary(amm.ass.lm)
+
+##Anova
+amm.ass.aov <- Anova(amm.ass.lm)
+
+##Tukey
+amm.ass.tuk <- tidy(summary(glht(amm.ass.lm, mcp(Assemblage="Tukey"))))
+```
+##Ammonium ~ Stem Density 
+```{r}
+##Filter
+amm.sd.full<- COMPM%>% 
+filter(!is.na(Mean.Amm)) %>%
+filter(Mean.Amm >= 0)#9 non-detects (i.e. negative ammonium values)
+
+##Make site a factor
+amm.sd.full$Site_ID <- as.factor(amm.sd.full$Site_ID)
+
+##Sharpio
+shapiro.test(log10(amm.sd.full$Mean.Amm))#Normal
+
+##Model
+amm.sd.full.lm <- lmer(formula = log10(Mean.Amm) ~ Live.Stem.Num + Stem.Num.IN.M + (1|Site_ID) , data = amm.sd.full)
+
+##Diagnostics 
+plot(amm.sd.full.lm)
+
+##Summary
+amm.sd.full.sum <- summary(amm.sd.full.lm)
+
+##Anova
+amm.sd.full.aov <- Anova(amm.sd.full.lm)
+
+##Model for regression line on graph
+amm.sd.full.rl <- lm(formula = log10(Mean.Amm) ~ Live.Stem.Num , data = amm.sd.full)
+
+##Summary for regression line
+summary(amm.sd.full.rl)
+```
+##Ammonium ~ Stem Density (Mixed ONLY)
+```{r}
+##Filter
+amm.sd.mix<- COMPM%>% 
+filter(!is.na(Mean.Amm)) %>%
+filter(Mean.Amm >= 0)%>%#9 non-detects (i.e. negative ammonium values)
+filter(Assemblage == "mixed")#Mixed treatment only
+
+##Make factor
+amm.sd.mix$Site_ID <- as.factor(amm.sd.mix$Site_ID)
+
+##Sharpio
+shapiro.test(log10(amm.sd.mix$Mean.Amm))#Normal
+
+##Model
+amm.sd.mix.lm1<- lm(log10(Mean.Amm) ~ Live.Stem.Num.M, data = amm.sd.mix)
+
+##Diagnostics
+plot(amm.sd.mix.lm1)
+
+##Summary
+amm.sd.mix.sum <- summary(amm.sd.mix.lm1)
+
+##Anova
+amm.sd.mix.aov <- Anova(amm.sd.mix.lm1)
+```
+##Nitrate 
+```{r}
+##Filter
+nit.ass <- COMPM%>%
+ filter(!is.na(Mean.Nitrate)) %>%
+ filter(Mean.Nitrate >= 0 )#Removing 26 non-detects (i.e.negative values)
+
+##Sharpio & Levene
+shapiro.test(log10(nit.ass$Mean.Nitrate))#Notnormal
+leveneTest(log10(Mean.Nitrate) ~ Assemblage, data=nit.ass)#Normal
+
+##PlotDistribution
+plotdist(log10(nit.ass$Mean.Nitrate), histo = TRUE, demp = TRUE)
+
+##Model
+nit.ass.glm <- glmmTMB(log10(Mean.Nitrate)~ Assemblage + Stem.Num.IN.M + (1|Site_ID), family = gaussian, data=nit.ass)
+
+##Diagnostics
+nit.ass.glm.res <- simulateResiduals(nit.ass.glm)
+plot(nit.ass.glm.res)
+
+##Summary
+nit.ass.sum <- summary(nit.ass.glm)
+
+##Anova
+nit.ass.aov <- Anova(nit.ass.glm)
+
+##Post Hoc Tukey Assemblage
+nit.ass.tuk <-tidy(summary(glht(nit.ass.glm, mcp(Assemblage="Tukey"))))
+```
+##Salinity
+```{r SDL 2017}
+##Filter
+sal.sdl2 <- COMPM%>%
+filter(Site_ID == "SDL2") %>% 
+filter(!is.na(Mean.Sal))
+
+##Sharpio & Levene | Log10 transform to meet normality assumption
+shapiro.test(log10(sal.sdl2$Mean.Sal))##Normal
+leveneTest(log10(Mean.Sal) ~ Assemblage, data=sal.sdl2)#Normal
+
+##Plot distribution
+plotdist(log10(sal.sdl2$Mean.Sal), histo = TRUE, demp = TRUE)
+
+##Glm
+sal.sdl2.glm <- glm(log10(Mean.Sal)~ Assemblage + Stem.Num.IN.M , data=sal.sdl2)
+
+##Summary
+sal.sdl2.sum <- summary(sal.sdl2.glm)
+
+##Anova
+sal.sdl2.aov <- Anova(sal.sdl2.glm)
+```
+
+```{r SDL 2016}
+##Filter
+sal.sdl1 <- COMPM%>%
+ filter(Site_ID == "SDL1") %>% 
+filter(!is.na(Mean.Sal))
+
+##Sharpio & Levene
+shapiro.test(sal.sdl1$Mean.Sal)#Normal
+leveneTest(Mean.Sal ~ Assemblage, data=sal.sdl1)#Normal
+
+##Plot distribution
+plotdist(sal.sdl1$Mean.Sal, histo = TRUE, demp = TRUE)
+
+##Glm
+sal.sdl1.glm <- glm(Mean.Sal~ Assemblage + Stem.Num.IN.M , data=sal.sdl1)
+
+##Summary
+sal.sdl1.sum <- summary(sal.sdl1.glm)
+
+##Anova
+sal.sdl1.aov <- Anova(sal.sdl1.glm)
+```
+
+```{r KF1 2016}
+##Filter
+sal.kf1 <- COMPM%>% 
+ filter(Site_ID == "KF1")%>% 
+ filter(!is.na(Mean.Sal))
+
+##Sharpio & Levene
+shapiro.test(sal.kf1$Mean.Sal)#Normal
+leveneTest(Mean.Sal ~ Assemblage, data=sal.kf1)#Normal
+
+##Plot distribution 
+plotdist(sal.kf1$Mean.Sal, histo = TRUE, demp = TRUE)
+
+##Glm
+sal.kf1.glm <- glm(Mean.Sal~ Assemblage + Stem.Num.IN.M , data=sal.kf1)
+
+##Summary
+sal.kf1.sum <- summary(sal.kf1.glm)
+
+##Anova
+sal.kf1.aov <- Anova(sal.kf1.glm)
+```
+##Doc
+```{r SDL 2017}
+####Filter
+uv.sdl2 <- COMPM%>% 
+ filter(Site_ID == "SDL2")%>% 
+ filter(!is.na(Mean.UV))
+
+##Sharpio & Levene
+shapiro.test(uv.sdl2$Mean.UV)#Normal
+leveneTest(Mean.UV ~ Assemblage, data=uv.sdl2)#Normal
+
+##Plot distribution 
+plotdist(uv.sdl2$Mean.UV, histo = TRUE, demp = TRUE)
+
+##Glm
+uv.sdl2.glm <- glm(Mean.UV~ Assemblage + Stem.Num.IN.M ,data=uv.sdl2)
+
+##Summary
+uv.sdl2.sum <- summary(uv.sdl2.glm)
+
+##Anova
+uv.sdl2.aov <- Anova(uv.sdl2.glm)
+```
+
+```{r SDL 2016}
+####Filter
+uv.sdl1<- COMPM%>% 
+ filter(Site_ID == "SDL1")%>% 
+ filter(!is.na(Mean.UV))
+
+##Sharpio & Levene
+shapiro.test(uv.sdl1$Mean.UV)#Notnormal
+leveneTest(Mean.UV ~ Assemblage, data=uv.sdl1)#Normal
+
+##Plot distribution 
+plotdist(uv.sdl1$Mean.UV, histo = TRUE, demp = TRUE)
+
+##Glm
+uv.sdl1.glm <- glm(Mean.UV~ Assemblage  + Stem.Num.IN.M,family= gaussian(), data=uv.sdl1)
+
+##Summary
+uv.sdl1.sum <- summary(uv.sdl1.glm)
+
+##Anova
+uv.sdl1.aov <- Anova(uv.sdl1.glm)
+```
+
+```{r KF 2016}
+####Filter
+uv.kf1 <- COMPM%>% 
+ filter(Site_ID == "KF1")%>% 
+ filter(!is.na(Mean.UV))
+
+##Sharpio & Levene
+shapiro.test(uv.kf1$Mean.UV)#Normal
+leveneTest(Mean.UV ~ Assemblage, data=uv.kf1)#Normal
+
+##Plot distribution 
+plotdist(uv.kf1$Mean.UV, histo = TRUE, demp = TRUE)
+
+##Glm
+uv.kf1.glm <- glm(Mean.UV~ Assemblage + Stem.Num.IN.M, data=uv.kf1)
+
+##Summary
+uv.kf1.sum <- summary(uv.kf1.glm)
+
+##Anova
+uv.kf1.aov <- Anova(uv.kf1.glm)
+```
