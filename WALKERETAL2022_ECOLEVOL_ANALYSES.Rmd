@@ -246,7 +246,7 @@ In.sd.ass$Site_ID<- as.factor(In.sd.ass$Site_ID)
 
 ##Sharpio & Levene 
 shapiro.test(log10(In.sd.ass$Stem.Num.IN.M))#Normal
-leveneTest(Stem.Num.IN.M ~ Assemblage, data=In.sd.ass)#Normal
+leveneTest(log10(Stem.Num.IN.M ~ Assemblage, data=In.sd.ass))#Normal
 
 ##Plot distribution
 plotdist(log10(In.sd.ass$Stem.Num.IN.M), histo = TRUE, demp = TRUE)
@@ -264,14 +264,14 @@ In.sd.ass.sum <- summary(In.sd.ass.lm)
 In.sd.ass.aov <- Anova(In.sd.ass.lm)
 
 ##Tukey
-In.sd.ass.nre.tuk <- tidy(summary(glht(In.sd.ass.nre, mcp(Site_ID ="Tukey"))))
+In.sd.ass.lm.tuk <- tidy(summary(glht(In.sd.ass.lm, mcp(Site_ID ="Tukey"))))
 ```
 ##Cordgrass Stem Height
 ```{r}
 ##Filter
 sh.ass <- COMPM%>% 
  filter(Assemblage != "cordgrass\nremoval")%>%
- filter(is.na(Avg.SH))
+ filter(!is.na(Avg.SH))
 
 ##Sharpio & Levene
 shapiro.test(sh.ass$Avg.SH)#Normal
